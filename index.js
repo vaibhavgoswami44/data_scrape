@@ -1,58 +1,78 @@
-const express = require('express');
-const multer = require('multer');
-const xlsx = require('xlsx');
-const fs = require('fs');
-const path = require('path');
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const xlsx = require("xlsx");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-const workbookPath = 'data.xlsx';
-let workbook = xlsx.readFile(workbookPath);
-let sheet = workbook.Sheets[workbook.SheetNames[0]];
+// ✅ Allow requests from lazada.vn (CORS)
+app.use(
+  cors({
+    origin: "https://www.lazada.vn",
+  })
+);
 
-// Parse data
-function getData() {
-    return xlsx.utils.sheet_to_json(sheet, { range: 1, header: 1 });
-}
+// 📁 Storage configuration for uploaded HTML files
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "pages");
+  },
+  filename: (req, file, cb) => {
+    cb(null, file.originalname);
+  },
+});
+const upload = multer({ storage });
 
-// Get next task
-app.get('/get-task', (req, res) => {
-    const data = getData();
-    for (let i = 0; i < data.length; i++) {
-        const [number, url, id, status] = data[i];
-        if (status !== 'done') {
-            return res.json({ url, id, done: false });
-        }
+// 📄 Load Excel data
+const excelFilePath = "data.xlsx";
+let workbook = xlsx.readFile(excelFilePath);
+let sheetName = workbook.SheetNames[0];
+let worksheet = workbook.Sheets[sheetName];
+let data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+
+let currentIndex = 1; // Skip header row
+app.get("/", (req, res) => {
+  res.json("hh");
+});
+// 🔍 Serve the next task
+app.get("/get-task", (req, res) => {
+  while (currentIndex < data.length) {
+    const [number, url, id] = data[currentIndex];
+    if (id && url && number && data[currentIndex][3] !== "done") {
+      return res.json({ url, id });
     }
-    res.json({ done: true });
+    currentIndex++;
+  }
+  return res.json({ done: true });
 });
 
-// Handle uploads
-const upload = multer({ dest: 'uploads/' });
-app.post('/submit-task', upload.single('file'), (req, res) => {
-    const { id } = req.body;
-    const tempPath = req.file.path;
-    const targetPath = path.join(__dirname, 'pages', `${id}.html`);
+// 📤 Receive uploaded file and mark row as done
+app.post("/submit-task", upload.single("file"), (req, res) => {
+  const id = req.body.id;
+  const file = req.file;
 
-    // Move file
-    fs.renameSync(tempPath, targetPath);
+  if (!id || !file) {
+    return res.status(400).json({ error: "Missing ID or file" });
+  }
 
-    // Update Excel
-    const data = getData();
-    for (let i = 0; i < data.length; i++) {
-        const row = data[i];
-        if (row[2] == id) {
-            const cellRef = `D${i + 2}`;
-            sheet[cellRef] = { t: 's', v: 'done' };
-            xlsx.writeFile(workbook, workbookPath);
-            break;
-        }
-    }
+  // ✅ Mark row as done
+  const row = data.findIndex((row) => row[2] === id);
+  if (row !== -1) {
+    data[row][3] = "done";
+    const updatedSheet = xlsx.utils.aoa_to_sheet(data);
+    workbook.Sheets[sheetName] = updatedSheet;
+    xlsx.writeFile(workbook, excelFilePath);
+  }
 
-    res.json({ success: true });
+  res.json({ success: true });
 });
+
+// ✅ Make sure directories exist
+if (!fs.existsSync("pages")) fs.mkdirSync("pages");
 
 app.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}`);
+  console.log(`Server running on port ${port}`);
 });
