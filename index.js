@@ -31,7 +31,7 @@ let worksheet = workbook.Sheets[sheetName];
 let data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
 
 let currentIndex = 1; // skip header
-app.get("/get-task", (req, res) => {
+app.get("/", (req, res) => {
   res.json("ss");
 });
 // Serve next task
