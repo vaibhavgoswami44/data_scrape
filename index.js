@@ -1,120 +1,72 @@
-const express = require("express");
-const cors = require("cors");
-const multer = require("multer");
-const xlsx = require("xlsx");
-const fs = require("fs");
-const path = require("path");
-const archiver = require("archiver"); // 🔄 Used to zip files
+const express = require('express');
+const mongoose = require('mongoose');
+const bodyParser = require('body-parser');
+const cors = require('cors');
 
+// Setup
 const app = express();
-const port = process.env.PORT || 3000;
+app.use(cors());
+app.use(bodyParser.json());
 
-// Enable CORS for Lazada
-app.use(
-  cors({
-    origin: "https://www.lazada.vn",
-  })
-);
+// MongoDB connection
+const uri = 'mongodb+srv://vaibhavgoswami303:n39y7eAJEMwkDZvr@cluster0.qzvptyv.mongodb.net/';
+mongoose.connect(uri, { dbName: 'your_db_name' }); // replace 'your_db_name' with actual DB name
 
-// Setup upload storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "pages"),
-  filename: (req, file, cb) => cb(null, file.originalname),
+// Schema and Model
+const productSchema = new mongoose.Schema({
+  __EMPTY: Number,
+  product_url: String,
+  hashid: String,
+  status: { type: String, default: 'pending' }
 });
-const upload = multer({ storage });
+const Product = mongoose.model('Product', productSchema);
 
-// Load Excel
-const excelFilePath = "data.xlsx";
-let workbook = xlsx.readFile(excelFilePath);
-let sheetName = workbook.SheetNames[0];
-let worksheet = workbook.Sheets[sheetName];
-let data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+// API to get one pending task
+app.get('/get-task', async (req, res) => {
+  try {
+    const task = await Product.findOneAndUpdate(
+      { status: 'pending' },
+      { $set: { status: 'working' } },
+      { new: true }
+    );
 
-let currentIndex = 1; // skip header
-app.get("/", (req, res) => {
-  res.json("ss");
-});
-// Serve next task
-app.get("/get-task", (req, res) => {
-  while (currentIndex < data.length) {
-    const [number, url, id, status] = data[currentIndex];
-    if (id && url && number && status !== "done") {
-      return res.json({ url, id });
+    if (!task) {
+      return res.json({ done: true }); // No more tasks
     }
-    currentIndex++;
-  }
 
-  // When done, respond with done and download links
-  return res.json({
-    done: true,
-    zipUrl: `/download/pages.zip`,
-    excelUrl: `/download/data.xlsx`,
-  });
+    res.json({
+      done: false,
+      product_url: task.product_url,
+      hashid: task.hashid
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
-// Upload HTML page and mark done
-app.post("/submit-task", upload.single("file"), (req, res) => {
-  const id = req.body.id;
-  const file = req.file;
+// API to update status from client (done or error)
+app.post('/update-task', async (req, res) => {
+  const { hashid, status } = req.body;
 
-  if (!id || !file) {
-    return res.status(400).json({ error: "Missing ID or file" });
+  if (!['done', 'error'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
   }
 
-  // Mark row done
-  const row = data.findIndex((row) => row[2] === id);
-  if (row !== -1) {
-    data[row][3] = "done";
-    const updatedSheet = xlsx.utils.aoa_to_sheet(data);
-    workbook.Sheets[sheetName] = updatedSheet;
-    xlsx.writeFile(workbook, excelFilePath);
+  try {
+    await Product.findOneAndUpdate(
+      { hashid },
+      { $set: { status } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Update failed' });
   }
-
-  res.json({ success: true });
 });
 
-// Download updated Excel or zipped HTMLs
-app.get("/download/:filename", (req, res) => {
-  const fileName = req.params.filename;
-  const filePath = path.join(
-    __dirname,
-    fileName === "data.xlsx" ? "data.xlsx" : "pages.zip"
-  );
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).send("File not found");
-  }
-
-  res.download(filePath);
-});
-
-// Auto-create zip of all pages
-function createZipArchive() {
-  const zipPath = path.join(__dirname, "pages.zip");
-  const output = fs.createWriteStream(zipPath);
-  const archive = archiver("zip");
-
-  output.on("close", () =>
-    console.log(`📦 ZIP created: ${archive.pointer()} total bytes`)
-  );
-  archive.on("error", (err) => {
-    throw err;
-  });
-
-  archive.pipe(output);
-  archive.directory("pages/", false);
-  archive.finalize();
-}
-
-// 🧹 Optional: create the zip when server starts or when you want
-app.get("/generate-zip", (req, res) => {
-  createZipArchive();
-  res.send("Zip created.");
-});
-
-// Ensure folders exist
-if (!fs.existsSync("pages")) fs.mkdirSync("pages");
-
-app.listen(port, () => {
-  console.log(`✅ Server running at http://localhost:${port}`);
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
